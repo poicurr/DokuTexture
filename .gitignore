@@ -1,0 +1,7 @@
+DokuTexture/src/third_party/
+DokuTexture/build/
+*.zip
+*.log
+/build*/
+/consumer*/
+/qa/

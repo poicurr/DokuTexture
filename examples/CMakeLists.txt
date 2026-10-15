@@ -1,0 +1,2 @@
+add_executable(minimal_consumer minimal_consumer.cpp)
+target_link_libraries(minimal_consumer PRIVATE DokuTexture_static)

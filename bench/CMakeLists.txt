@@ -1,0 +1,3 @@
+add_executable(bench_throughput bench_throughput.cpp)
+target_link_libraries(bench_throughput PRIVATE DokuTexture_static)
+target_link_libraries(bench_throughput PRIVATE DokuTexture_test_decoder)
