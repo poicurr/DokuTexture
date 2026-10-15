@@ -87,6 +87,10 @@ if(TP_ENABLE_BASIS_TRANSCODER)
 endif()
 
 add_library(DokuTexture_static STATIC
+    include/DokuTexture/Types.hpp
+    include/DokuTexture/Encode.hpp
+    include/DokuTexture/Ktx2.hpp
+    include/DokuTexture/Transcode.hpp
     ${DOKUTEXTURE_SOURCES}
     ${BC7ENC_SOURCES}
     ${BASIS_SOURCES}

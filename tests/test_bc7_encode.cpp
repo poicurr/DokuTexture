@@ -1,5 +1,5 @@
+#include "DokuTexture/Encode.hpp"
 #include "bc7decomp.h"
-#include "doku/texture/encode.hpp"
 
 #include <cassert>
 #include <cmath>

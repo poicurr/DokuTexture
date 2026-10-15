@@ -1,4 +1,4 @@
-#include "doku/texture/ktx2.hpp"
+#include "DokuTexture/Ktx2.hpp"
 #include "validation.hpp"
 
 #include <algorithm>

@@ -6,6 +6,11 @@ Lightweight, independent C++17 library for CPU BC7 texture encoding, native BC7 
 - **C++ Namespace**: `doku::texture`
 - **C++ Standard**: C++17
 
+Public headers are `<DokuTexture/Types.hpp>`, `<DokuTexture/Encode.hpp>`,
+`<DokuTexture/Ktx2.hpp>` and `<DokuTexture/Transcode.hpp>`. The namespace remains
+`doku::texture`. The old lowercase include paths are removed; see
+[MIGRATION.md](MIGRATION.md) for the include/ByteSpan compatibility changes.
+
 ---
 
 ## 1. Overview & Architectural Boundaries
@@ -126,12 +131,13 @@ cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 ctest -C Release --output-on-failure
 ```
-Run from this `DokuTexture` subdirectory (the Git repository root contains it).
+Run from the Git repository root, which now directly contains `CMakeLists.txt`.
 CMake 3.18+ is required. This review executed Windows x64 builds with VS2026 /
 MSVC 19.51 and CMake 4.4.0, using `cmake --build ... --parallel 2` and
 `ctest ... -j 1`. Use generator `Visual Studio 18 2026` on that toolchain.
-See [REVIEW.md](REVIEW.md) for exact commands and remaining limits. No Linux
-build was repeated in this review. Optional `ktx` on PATH adds two validator tests.
+See [MIGRATION.md](MIGRATION.md) for current root-level build/consumer/format
+commands. No Linux build was repeated in this update. Optional `ktx` on PATH
+adds two validator tests.
 
 ---
 
