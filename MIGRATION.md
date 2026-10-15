@@ -95,21 +95,19 @@ and full/native-only/both-disabled parent consumers built and exited 0.
 `clang-format --dry-run --Werror` passed for all 17 owned C++ files. A normalized
 diff confirmed that changes beyond formatting/include spelling are limited to
 the ByteSpan alias/comments and consumer constness checks. Dependency source
-pins, license/NOTICE files and binary fixtures are unchanged.
+pins, third-party license/NOTICE files and binary fixtures are unchanged.
 
-## Requested MIT license
+## Project MIT license
 
-The requested reference is
+The MIT permission and disclaimer text comes from the requested reference,
 [poicurr/hfsm LICENSE](https://raw.githubusercontent.com/poicurr/hfsm/refs/heads/main/LICENSE),
-whose exact attribution is `Copyright (c) 2022 dknb0709`. No HFSM implementation
-is incorporated by this update. That notice identifies the reference project's
-holder; it does not establish the DokuTexture wrapper's holder. A project LICENSE
-has therefore not been added pending confirmation that this attribution also
-applies here, or provision of the appropriate DokuTexture year/holder. No new
-holder or year is inferred from a GitHub username, commit author or file date.
+whose attribution is `Copyright (c) 2022 dknb0709`. The user confirmed
+`Copyright (c) 2026 poicurr` for DokuTexture, so the root [LICENSE](LICENSE)
+uses that attribution and otherwise retains the reference MIT text verbatim.
+No HFSM implementation is incorporated or reattributed by this update.
 
-The wrapper can use the requested MIT terms once its attribution is resolved.
-Its dependencies retain their own grants: bc7enc MIT, Basis Apache-2.0, bundled
+The project-owned wrapper uses MIT. Its dependencies retain their own grants:
+bc7enc MIT, Basis Apache-2.0, bundled
 Zstd BSD-3-Clause plus the MIT divsufsort notice. They are not relicensed to MIT.
 Keep the license texts, attribution notices and Apache redistribution conditions
 when distributing those components, including binary distributions. All existing

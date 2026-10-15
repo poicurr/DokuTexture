@@ -154,5 +154,8 @@ Dependencies are fetched by full commit SHA when local sources are absent.
 Local `src/third_party` fallbacks and CMake `FETCHCONTENT_SOURCE_DIR_*` overrides
 are intentionally supported and are the caller's responsibility to verify.
 License texts and Basis NOTICE are retained in [licenses/](licenses/).
-DokuTexture itself still has no project LICENSE; its owner must choose one
-before third parties can assume redistribution permission.
+DokuTexture's project-owned code is distributed under the [MIT License](LICENSE),
+Copyright (c) 2026 poicurr. Dependencies retain the licenses listed above.
+Redistributable packages must retain the project LICENSE, applicable third-party
+license texts and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including the
+Basis NOTICE. This repository does not yet provide install/package export targets.
