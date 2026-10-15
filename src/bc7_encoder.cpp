@@ -1,5 +1,5 @@
+#include "DokuTexture/Encode.hpp"
 #include "bc7enc.h"
-#include "doku/texture/encode.hpp"
 #include "validation.hpp"
 
 #include <algorithm>

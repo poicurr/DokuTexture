@@ -1,5 +1,5 @@
-#include "doku/texture/encode.hpp"
-#include "doku/texture/ktx2.hpp"
+#include "DokuTexture/Encode.hpp"
+#include "DokuTexture/Ktx2.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cstring>

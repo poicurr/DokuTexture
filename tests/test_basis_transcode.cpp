@@ -1,6 +1,6 @@
+#include "DokuTexture/Ktx2.hpp"
+#include "DokuTexture/Transcode.hpp"
 #include "bc7decomp.h"
-#include "doku/texture/ktx2.hpp"
-#include "doku/texture/transcode.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cmath>

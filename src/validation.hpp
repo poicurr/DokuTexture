@@ -1,6 +1,6 @@
 #pragma once
 
-#include "doku/texture/types.hpp"
+#include "DokuTexture/Types.hpp"
 #include <limits>
 #include <new>
 #include <stdexcept>

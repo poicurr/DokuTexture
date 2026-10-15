@@ -1,5 +1,5 @@
-#include "doku/texture/ktx2.hpp"
-#include "doku/texture/transcode.hpp"
+#include "DokuTexture/Ktx2.hpp"
+#include "DokuTexture/Transcode.hpp"
 
 #include "basisu_transcoder.h"
 #include "validation.hpp"

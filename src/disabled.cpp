@@ -1,5 +1,5 @@
-#include "doku/texture/ktx2.hpp"
-#include "doku/texture/transcode.hpp"
+#include "DokuTexture/Ktx2.hpp"
+#include "DokuTexture/Transcode.hpp"
 
 namespace doku::texture {
 #if !TP_HAS_KTX2

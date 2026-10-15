@@ -1,6 +1,6 @@
-#include "doku/texture/encode.hpp"
-#include "doku/texture/ktx2.hpp"
-#include "doku/texture/transcode.hpp"
+#include "DokuTexture/Encode.hpp"
+#include "DokuTexture/Ktx2.hpp"
+#include "DokuTexture/Transcode.hpp"
 
 #include <atomic>
 #include <cassert>

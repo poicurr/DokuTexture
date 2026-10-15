@@ -1,12 +1,24 @@
-#include <doku/texture/encode.hpp>
-#include <doku/texture/ktx2.hpp>
-#include <doku/texture/transcode.hpp>
+#include <DokuTexture/Encode.hpp>
+#include <DokuTexture/Ktx2.hpp>
+#include <DokuTexture/Transcode.hpp>
 #include <optional>
 #include <type_traits>
 
 int main() {
   static_assert(std::is_same_v<std::optional<int>::value_type, int>);
   using namespace doku::texture;
+  static_assert(std::is_same_v<ByteSpan, Span<std::byte>>);
+  static_assert(std::is_same_v<decltype(ByteSpan{}.data), const std::byte *>);
+  static_assert(std::is_same_v<decltype(Span<Rgba8MipView>{}.data),
+                               const Rgba8MipView *>);
+  static_assert(!std::is_assignable_v<decltype(*ByteSpan{}.data), std::byte>);
+  static_assert(std::is_aggregate_v<ByteSpan>);
+  constexpr ByteSpan empty{};
+  static_assert(empty.data == nullptr && empty.size == 0);
+  constexpr std::byte immutable[] = {std::byte{0x42}};
+  const ByteSpan borrowed{immutable, 1};
+  if (*borrowed.data != std::byte{0x42})
+    return 4;
   std::byte rgba[4]{};
   auto encoded = encode_bc7_mip({1, 1, 4, {rgba, 4}}, {});
   if (!encoded || encoded.value().payload.size() != 16)
