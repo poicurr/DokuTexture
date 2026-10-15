@@ -7,15 +7,19 @@ Lightweight, independent C++17 library for CPU BC7 texture encoding, native BC7 
 - **C++ Standard**: C++17
 
 Public headers are `<DokuTexture/Types.hpp>`, `<DokuTexture/Encode.hpp>`,
-`<DokuTexture/Ktx2.hpp>` and `<DokuTexture/Transcode.hpp>`. The namespace remains
-`doku::texture`. The old lowercase include paths are removed; see
-[MIGRATION.md](MIGRATION.md) for the include/ByteSpan compatibility changes.
+`<DokuTexture/Ktx2.hpp>` and `<DokuTexture/Transcode.hpp>`, in namespace
+`doku::texture`. `ByteSpan` is `Span<std::byte>`; `Span<T>` exposes `const T*`
+as a borrowed, read-only view and does not own storage or check element access.
 
 ---
 
 ## 1. Overview & Architectural Boundaries
 
 `DokuTexture` is designed as a small, high-quality, lightweight utility library. It wraps trusted open-source codecs (`bc7enc` and `basis_universal`) with a clean, strongly-typed C++17 API.
+
+This is preparation for possible future offline compression in DokuEngine after
+its texture streaming work. There are currently no adopted consumers or Engine
+integration. The consumer under `tests/consumer` is a build-validation fixture.
 
 ### What `DokuTexture` Handles:
 - CPU RGBA8 image compression into GPU-ready BC7 blocks (`BC7_UNorm` and `BC7_Srgb`).
@@ -114,30 +118,49 @@ The benchmark averages squared error over RGB channels in the encoded 0..255 val
 
 ---
 
-## 6. Build & Test Instructions
+## 6. Build, Test & Format
 
-### Linux / GCC 13 / Clang 18:
-```bash
-mkdir build && cd build
-cmake .. -DTP_ENABLE_KTX2=ON -DTP_ENABLE_BASIS_TRANSCODER=ON -DTP_BUILD_TESTS=ON
-cmake --build .
-ctest --output-on-failure
+CMake 3.18+ is required. Run from the repository root. Initial dependency
+acquisition requires Git and network access unless sources are already supplied.
+
+### Windows x64 / Visual Studio 2026:
+
+```powershell
+cmake -S . -B build-msvc -G "Visual Studio 18 2026" -A x64 -DTP_BUILD_BENCHMARKS=ON -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+cmake --build build-msvc --config Release --parallel 2
+ctest --test-dir build-msvc -C Release --output-on-failure -j 1
+cmake --build build-msvc --config Debug --parallel 2
+ctest --test-dir build-msvc -C Debug --output-on-failure -j 1
 ```
 
-### Windows (MSVC 2022):
-```cmd
-mkdir build && cd build
-cmake .. -G "Visual Studio 17 2022" -A x64
-cmake --build . --config Release
-ctest -C Release --output-on-failure
+The benchmark is compiled by this configuration; run it separately only when
+performance measurements are intended. Optional `ktx` on PATH adds two validator
+tests. `FETCHCONTENT_UPDATES_DISCONNECTED=ON` permits the initial download and
+avoids subsequent dependency update checks.
+
+The standalone parent consumer verifies the public CMake target:
+
+```powershell
+cmake -S tests/consumer -B consumer-full -G "Visual Studio 18 2026" -A x64 -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+cmake --build consumer-full --config Release --parallel 2
+.\consumer-full\Release\consumer.exe
 ```
-Run from the Git repository root, which now directly contains `CMakeLists.txt`.
-CMake 3.18+ is required. This review executed Windows x64 builds with VS2026 /
-MSVC 19.51 and CMake 4.4.0, using `cmake --build ... --parallel 2` and
-`ctest ... -j 1`. Use generator `Visual Studio 18 2026` on that toolchain.
-See [MIGRATION.md](MIGRATION.md) for current root-level build/consumer/format
-commands. No Linux build was repeated in this update. Optional `ktx` on PATH
-adds two validator tests.
+
+For native-only or encode-only consumer checks, disable
+`TP_ENABLE_BASIS_TRANSCODER`, and additionally disable `TP_ENABLE_KTX2` for
+encode-only. Linux can use `cmake -S . -B build`, `cmake --build build --parallel 2`
+and `ctest --test-dir build --output-on-failure -j 1`; see the recorded platform
+coverage in [VALIDATION.md](VALIDATION.md).
+
+Format all project-owned C++ sources/headers in `src`, `include`, `tests`,
+`examples` and `bench` with the root `.clang-format`. Exclude third-party,
+FetchContent, generated/build files and license text:
+
+```powershell
+$owned = @(git ls-files -- src include tests examples bench | Where-Object { $_ -match '\.(cc|cpp|cxx|h|hh|hpp|hxx|ipp|tpp)$' -and $_ -notmatch '(^|/)(third_party|_deps|generated)(/|$)' })
+clang-format --dry-run --Werror --style=file @owned
+# Apply with: clang-format -i --style=file @owned
+```
 
 ---
 
