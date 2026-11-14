@@ -33,6 +33,7 @@ void test_concurrent_independent_calls() {
       EncodeOptions opts;
       opts.target = GpuFormat::BC7_UNorm;
       opts.quality = Quality::Fast;
+      opts.execution.maxWorkers = 4;
 
       auto res = encode_bc7_mip(mip, opts);
       if (res.has_value() && res.value().payload.size() == 4096) {
@@ -81,18 +82,23 @@ void test_cancel_during_processing_and_reuse() {
   std::atomic_bool cancel{false};
   EncodeOptions opts;
   opts.quality = Quality::High;
+  opts.execution.maxWorkers = 4;
   opts.execution.cancelFlag = &cancel;
+  const Rgba8MipView mips[] = {
+      {512, 512, 2048, {pixels.data(), pixels.size()}},
+      {256, 256, 1024, {pixels.data(), pixels.size()}},
+  };
   std::thread requestCancel([&] {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     cancel.store(true, std::memory_order_relaxed);
   });
-  auto result =
-      encode_bc7_mip({512, 512, 2048, {pixels.data(), pixels.size()}}, opts);
+  auto result = encode_bc7_chain({mips, 2}, opts);
   requestCancel.join();
   assert(!result && result.error().code == ErrorCode::Cancelled);
   cancel.store(false);
-  auto reuse = encode_bc7_mip({1, 1, 4, {pixels.data(), 4}}, opts);
-  assert(reuse && reuse.value().payload.size() == 16);
+  opts.quality = Quality::Fast;
+  auto reuse = encode_bc7_chain({mips, 2}, opts);
+  assert(reuse && reuse.value().payload.size() == 512 * 512 + 256 * 256);
 }
 
 int main() {

@@ -75,6 +75,35 @@ void test_ktx2_roundtrip_bc7_unorm() {
   assert(std::memcmp(readTex.payload.data(), encTex.payload.data(),
                      encTex.payload.size()) == 0);
 
+  std::uint32_t kvdOffset, kvdLength;
+  std::memcpy(&kvdOffset, ktx2File.data() + 56, sizeof(kvdOffset));
+  std::memcpy(&kvdLength, ktx2File.data() + 60, sizeof(kvdLength));
+  const auto entryOffset = kvdOffset + kvdLength;
+  constexpr std::uint32_t ENTRY_SIZE = 256 * 1024;
+  constexpr char KEY[] = "custom-metadata";
+  ktx2File.insert(ktx2File.begin() + entryOffset, ENTRY_SIZE, std::byte{0xAB});
+  const std::uint32_t valueAndKeyLength = ENTRY_SIZE - 4;
+  std::memcpy(ktx2File.data() + entryOffset, &valueAndKeyLength, 4);
+  std::memcpy(ktx2File.data() + entryOffset + 4, KEY, sizeof(KEY));
+  kvdLength += ENTRY_SIZE;
+  std::memcpy(ktx2File.data() + 60, &kvdLength, sizeof(kvdLength));
+  const auto levelOffset = info.levelIndices.front().byteOffset + ENTRY_SIZE;
+  std::memcpy(ktx2File.data() + 80, &levelOffset, sizeof(levelOffset));
+  fileSpan = {ktx2File.data(), ktx2File.size()};
+
+  execOpts.limits.maxWorkingBytes = 24; // One level-index entry.
+  auto extended = inspect_ktx2(fileSpan, execOpts);
+  assert(extended);
+  assert(extended.value().metadata.orientation == info.metadata.orientation);
+  execOpts.limits.maxWorkingBytes = encTex.payload.size();
+  auto extendedRead = read_ktx2_native_bc7(fileSpan, execOpts);
+  assert(extendedRead && extendedRead.value().payload == encTex.payload);
+
+  ktx2File[entryOffset + 4 + sizeof(KEY) - 1] = std::byte{0xAB};
+  auto unterminated = inspect_ktx2(fileSpan, execOpts);
+  assert(!unterminated &&
+         unterminated.error().code == ErrorCode::InvalidContainer);
+
   std::cout << "  -> PASSED" << std::endl;
 }
 

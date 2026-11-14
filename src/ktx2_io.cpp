@@ -3,7 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
-#include <iostream>
+#include <string_view>
 
 namespace doku::texture {
 
@@ -172,8 +172,7 @@ Result<Ktx2Info> inspect_ktx2(ByteSpan file,
     return Error{ErrorCode::TruncatedInput,
                  "File is truncated before complete level index table."};
   }
-  if (detail::exceeds(levelIndexTableSize + std::uint64_t(kvdLength) * 2,
-                      limits.maxWorkingBytes)) {
+  if (detail::exceeds(levelIndexTableSize, limits.maxWorkingBytes)) {
     return Error{ErrorCode::ResourceLimitExceeded,
                  "Inspection metadata exceeds working limit."};
   }
@@ -289,14 +288,21 @@ Result<Ktx2Info> inspect_ktx2(ByteSpan file,
     const auto *zero = static_cast<const char *>(std::memchr(begin, 0, n));
     if (!zero)
       return Error{ErrorCode::InvalidContainer, "KVD key is not terminated."};
-    std::string key(begin, zero);
-    std::string value(zero + 1, begin + n);
-    if (!value.empty() && value.back() == '\0')
-      value.pop_back();
+    const std::string_view key(begin, static_cast<std::size_t>(zero - begin));
+    const auto readValue = [&] {
+      const auto *valueBegin = zero + 1;
+      const auto *valueEnd = begin + n;
+      std::string_view value(valueBegin,
+                             static_cast<std::size_t>(valueEnd - valueBegin));
+      if (!value.empty() && value.back() == '\0')
+        value.remove_suffix(1);
+      return value;
+    };
     if (key == "KTXorientation") {
       if (begin[n - 1] != '\0')
         return Error{ErrorCode::InvalidContainer,
                      "Orientation must be NUL-terminated."};
+      const auto value = readValue();
       if (value == "rd")
         info.metadata.orientation = Orientation::TopLeft;
       else if (value == "ru")
@@ -305,6 +311,7 @@ Result<Ktx2Info> inspect_ktx2(ByteSpan file,
         return Error{ErrorCode::UnsupportedMetadata,
                      "Unsupported orientation."};
     } else if (key == "KTXswizzle") {
+      const auto value = readValue();
       if (value.size() != 4)
         return Error{ErrorCode::InvalidContainer, "Invalid swizzle."};
       const char *channels = "rgba01";

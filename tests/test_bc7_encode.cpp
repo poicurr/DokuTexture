@@ -1,6 +1,7 @@
 #include "DokuTexture/Encode.hpp"
 #include "bc7decomp.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -156,49 +157,60 @@ void test_translucent_alpha_encoding() {
 }
 
 void test_mip_chain_encoding() {
-  std::cout << "[Test] Mip Chain Encoding (8x8 -> 4x4 -> 2x2 -> 1x1)"
+  std::cout << "[Test] Padded NPOT mip chain matches individual encodes"
             << std::endl;
-
-  std::vector<std::vector<std::byte>> rawMips(4);
-  std::vector<Rgba8MipView> mips(4);
-
-  std::uint32_t dims[4] = {8, 4, 2, 1};
-  for (int l = 0; l < 4; ++l) {
-    std::uint32_t d = dims[l];
-    rawMips[l].resize(d * d * 4, static_cast<std::byte>(128));
-
-    mips[l].width = d;
-    mips[l].height = d;
-    mips[l].rowPitchBytes = d * 4;
-    mips[l].bytes = ByteSpan{rawMips[l].data(), rawMips[l].size()};
-  }
-
-  Span<Rgba8MipView> chainView{mips.data(), mips.size()};
   EncodeOptions opts;
   opts.quality = Quality::Fast;
+  opts.target = GpuFormat::BC7_Srgb;
 
+  std::vector<OwningBuffer> rawMips;
+  std::vector<Rgba8MipView> mips;
+  OwningBuffer expected;
+  for (std::uint32_t w = 257, h = 129;;) {
+    const auto pitch = w * 4 + 12;
+    auto &pixels = rawMips.emplace_back((h - 1) * pitch + w * 4);
+    for (std::size_t i = 0; i < pixels.size(); ++i)
+      pixels[i] = std::byte((i * 71 + i / 17 + mips.size()) % 256);
+    mips.push_back({w, h, pitch, {pixels.data(), pixels.size()}});
+    auto mip = encode_bc7_mip(mips.back(), opts);
+    assert(mip);
+    const auto &payload = mip.value().payload;
+    expected.insert(expected.end(), payload.begin(), payload.end());
+    if (w == 1 && h == 1)
+      break;
+    w = std::max(1U, w / 2);
+    h = std::max(1U, h / 2);
+  }
+
+  opts.execution.maxWorkers = 4;
+  opts.execution.limits.maxWorkingBytes = expected.size();
+  const Span<Rgba8MipView> chainView{mips.data(), mips.size()};
   auto res = encode_bc7_chain(chainView, opts);
   assert(res.has_value());
 
   const auto &tex = res.value();
-  assert(tex.mips.size() == 4);
+  assert(tex.mips.size() == mips.size());
+  assert(tex.payload == expected);
+  assert(tex.metadata.colorSpace == ColorSpace::SRGB);
 
-  // Check offsets and sizes
   std::uint64_t expectedOffset = 0;
-  std::uint32_t expectedBlocks[4] = {2, 1, 1, 1}; // blocks per side
-  for (int l = 0; l < 4; ++l) {
-    assert(tex.mips[l].level == static_cast<std::uint32_t>(l));
-    assert(tex.mips[l].blocksX == expectedBlocks[l]);
-    assert(tex.mips[l].blocksY == expectedBlocks[l]);
-    assert(tex.mips[l].offsetBytes == expectedOffset);
-
-    std::uint64_t size =
-        static_cast<std::uint64_t>(expectedBlocks[l]) * expectedBlocks[l] * 16;
-    assert(tex.mips[l].sizeBytes == size);
+  for (std::size_t level = 0; level < mips.size(); ++level) {
+    const auto &layout = tex.mips[level];
+    const auto blocksX = (mips[level].width + 3) / 4;
+    const auto blocksY = (mips[level].height + 3) / 4;
+    const auto size = std::uint64_t(blocksX) * blocksY * 16;
+    assert(layout.level == level);
+    assert(layout.width == mips[level].width &&
+           layout.height == mips[level].height);
+    assert(layout.blocksX == blocksX && layout.blocksY == blocksY);
+    assert(layout.rowPitchBytes == blocksX * 16);
+    assert(layout.offsetBytes == expectedOffset && layout.sizeBytes == size);
     expectedOffset += size;
   }
-
   assert(tex.payload.size() == expectedOffset);
+  --opts.execution.limits.maxWorkingBytes;
+  auto limited = encode_bc7_chain(chainView, opts);
+  assert(!limited && limited.error().code == ErrorCode::ResourceLimitExceeded);
 
   std::cout << "  -> PASSED" << std::endl;
 }
@@ -206,8 +218,10 @@ void test_mip_chain_encoding() {
 void test_multithreading_and_cancel() {
   std::cout << "[Test] Multithreading & Cancel Flag" << std::endl;
 
-  std::uint32_t w = 256, h = 256;
-  std::vector<std::byte> rawRgba(w * h * 4, static_cast<std::byte>(100));
+  std::uint32_t w = 16381, h = 3;
+  std::vector<std::byte> rawRgba(w * h * 4);
+  for (std::size_t i = 0; i < rawRgba.size(); ++i)
+    rawRgba[i] = std::byte((i * 71 + i / 17) % 256);
 
   Rgba8MipView mip;
   mip.width = w;
@@ -217,7 +231,7 @@ void test_multithreading_and_cancel() {
 
   // 1. Multithreading maxWorkers = 4
   EncodeOptions opts;
-  opts.execution.maxWorkers = 2;
+  opts.execution.maxWorkers = 4;
   opts.quality = Quality::Fast;
 
   auto res4 = encode_bc7_mip(mip, opts);
@@ -228,8 +242,7 @@ void test_multithreading_and_cancel() {
   auto res1 = encode_bc7_mip(mip, opts);
   assert(res1.has_value());
 
-  // Payload size must match
-  assert(res4.value().payload.size() == res1.value().payload.size());
+  assert(res4.value().payload == res1.value().payload);
 
   // 3. Cancel flag test
   std::atomic_bool cancelFlag{true};

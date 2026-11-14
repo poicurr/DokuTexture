@@ -98,14 +98,14 @@ separate CMake parent project.
 
 ### 4.4 Threading & Cancellation
 - Functions are reentrant and safe for concurrent execution across independent caller threads.
-- For single-call parallelism (`maxWorkers > 1`), row ranges are divided among worker threads without thread pool leaks.
+- BC7 encoding runs small mips on the calling thread. For larger mips, the caller and workers take contiguous block chunks as they become available. The participant count is bounded by available hardware threads and `maxWorkers` (zero is treated as one). A mip chain reuses the workers created for that call across its eligible levels.
 - When `options.execution.cancelFlag` is set to `true`, workers stop block processing and join safely before returning `ErrorCode::Cancelled`.
 - Encode checks cancellation per block. KTX I/O and Basis check per level; an upstream transcode/codebook call cannot be interrupted mid-call. `maxWorkers` controls encode only; Basis is serial. Independent caller jobs have independent worker limits, with no global scheduler.
 - Input spans and the cancel flag must remain alive and unchanged until the synchronous call returns (the flag may be atomically changed). Results own their payloads. There is no asynchronous context/shutdown API; callers must join active calls before DLL unload.
 
 ### 4.5 Limits and allocation failures
 - A zero resource limit means no caller-specified bound. Checked arithmetic, dimensions, mip counts, cumulative input/output size and representability are validated before payload allocation.
-- `maxWorkingBytes` checks known payload/temporary sizes (Basis includes file plus declared inflated levels plus output). It does **not** account for allocator overhead, thread stacks, initialization tables, all backend scratch allocations, or process RSS. It is not a strict memory budget.
+- `maxWorkingBytes` checks known payload/temporary sizes. BC7 encoding counts the final payload, KTX2 inspection counts its level index, and Basis includes file plus declared inflated levels plus output. It does **not** account for allocator overhead, thread stacks, initialization tables, all backend scratch allocations, or process RSS. It is not a strict memory budget.
 - Wrapper `std::bad_alloc` becomes `AllocationFailure`; the pinned Basis container can terminate on an internal allocation failure. Strict OOM recovery and hostile-input process isolation are not provided.
 - Disabling Basis avoids fetching/compiling Basis and Zstd. Disabled APIs return `MissingDependency`; the inspector/native reader remains available when Basis is enabled because transcode uses it.
 
@@ -114,10 +114,10 @@ separate CMake parent project.
 ## 5. Benchmarking
 
 The optional `bench_throughput` executable measures CPU BC7 encoding on
-synthetic, opaque RGBA8 gradients. Build it with:
+synthetic, opaque RGBA8 inputs. Build it with:
 
 ```sh
-cmake -S . -B build-bench -DTP_BUILD_BENCHMARKS=ON
+cmake -S . -B build-bench -DTP_BUILD_BENCHMARKS=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build-bench --config Release
 ```
 
@@ -126,13 +126,17 @@ example, `build-bench/bench/bench_throughput` with a single-configuration
 generator, or `build-bench/bench/Release/bench_throughput.exe` with a
 multi-configuration Visual Studio generator).
 
-The benchmark covers 512×512 and 2048×2048 images with Fast, Balanced, and
-High presets using one or four workers. It reports wall time, throughput,
-encoded payload size, and RGB-only PSNR calculated in the encoded 0–255 value
-space. It excludes alpha, is not linear-light PSNR, and does not represent
-typical texture assets. Results depend on the CPU, compiler, build flags, and
-workload; measure on your target environment rather than relying on historical
-figures.
+The benchmark covers small mips, full mip chains, mixed solid/noisy block
+layouts, a single block row, and 512×512 and 2048×2048 gradients across the
+Fast, Balanced, and High presets. It reports the cold 1×1 encode separately
+to keep backend initialization out of the steady-state timings.
+
+Each workload warms up with worker limits of one and four and checks that their
+payloads match. Seven batches alternate the order of the two worker limits.
+The benchmark reports median wall time per encode, throughput across all
+supplied pixels, payload size, and base-mip RGB PSNR in the 0–255 encoded
+value space. An encode failure or payload mismatch exits with a nonzero status.
+Results depend on the CPU, compiler, build flags, and workload.
 
 ---
 

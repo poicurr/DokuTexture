@@ -4,9 +4,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -20,15 +21,221 @@ void ensure_bc7enc_initialized() {
   std::call_once(g_bc7enc_init_flag, []() { bc7enc_compress_block_init(); });
 }
 
-inline std::uint32_t calc_blocks(std::uint32_t dim) {
-  if (dim == 0)
-    return 0;
-  return detail::blocks(dim);
-}
-
 inline std::uint32_t calc_mip_dim(std::uint32_t baseDim, std::uint32_t level) {
   std::uint32_t d = baseDim >> level;
   return d > 0 ? d : 1;
+}
+
+bool make_layout(Rgba8MipView mip, std::uint32_t level, std::uint64_t offset,
+                 MipLayout &layout) {
+  layout.level = level;
+  layout.width = mip.width;
+  layout.height = mip.height;
+  layout.blocksX = detail::blocks(mip.width);
+  layout.blocksY = detail::blocks(mip.height);
+  layout.offsetBytes = offset;
+  layout.rowPitchBytes = std::uint64_t(layout.blocksX) * 16;
+  return detail::multiply(layout.rowPitchBytes, layout.blocksY,
+                          layout.sizeBytes);
+}
+
+bool init_params(const EncodeOptions &options,
+                 bc7enc_compress_block_params &params) {
+  bc7enc_compress_block_params_init(&params);
+  if (options.target == GpuFormat::BC7_UNorm) {
+    bc7enc_compress_block_params_init_linear_weights(&params);
+  } else {
+    bc7enc_compress_block_params_init_perceptual_weights(&params);
+  }
+
+  switch (options.quality) {
+    case Quality::Fast:
+      params.m_uber_level = 0;
+      params.m_max_partitions_mode = 16;
+      params.m_try_least_squares = BC7ENC_FALSE;
+      return true;
+    case Quality::Balanced:
+    case Quality::High:
+      params.m_uber_level = options.quality == Quality::Balanced ? 1 : 2;
+      params.m_max_partitions_mode = BC7ENC_MAX_PARTITIONS1;
+      params.m_try_least_squares = BC7ENC_TRUE;
+      return true;
+  }
+  return false;
+}
+
+constexpr std::size_t BLOCKS_PER_CHUNK = 16;
+// Leave enough work per participant to amortize thread startup and scheduling.
+constexpr std::size_t MIN_BLOCKS_PER_WORKER = 64;
+
+struct MipJob {
+  Rgba8MipView mip;
+  std::uint32_t blocksX;
+  std::size_t blockCount;
+  std::byte *output;
+  const bc7enc_compress_block_params &params;
+  const ExecutionOptions &execution;
+  std::atomic<std::size_t> nextBlock{0};
+  std::atomic_bool cancelled{false};
+
+  void encode_range(std::size_t begin, std::size_t end) noexcept {
+    auto by = static_cast<std::uint32_t>(begin / blocksX);
+    auto bx = static_cast<std::uint32_t>(begin % blocksX);
+    auto *dst = output + begin * 16;
+    for (auto block = begin; block < end; ++block) {
+      if (detail::cancelled(execution)) {
+        cancelled.store(true, std::memory_order_relaxed);
+        return;
+      }
+      alignas(16) std::uint8_t blockPixels[64];
+      for (std::uint32_t py = 0; py < 4; ++py) {
+        const auto iy = std::min(by * 4 + py, mip.height - 1);
+        const auto *srcRow =
+            mip.bytes.data + static_cast<std::size_t>(iy * mip.rowPitchBytes);
+        for (std::uint32_t px = 0; px < 4; ++px) {
+          const auto ix = std::min(bx * 4 + px, mip.width - 1);
+          std::memcpy(blockPixels + (py * 4 + px) * 4,
+                      srcRow + static_cast<std::size_t>(ix) * 4, 4);
+        }
+      }
+      bc7enc_compress_block(dst, blockPixels, &params);
+      dst += 16;
+      if (++bx == blocksX) {
+        bx = 0;
+        ++by;
+      }
+    }
+  }
+
+  void work() noexcept {
+    while (!cancelled.load(std::memory_order_relaxed)) {
+      const auto begin =
+          nextBlock.fetch_add(BLOCKS_PER_CHUNK, std::memory_order_relaxed);
+      if (begin >= blockCount)
+        return;
+      encode_range(begin, std::min(begin + BLOCKS_PER_CHUNK, blockCount));
+    }
+  }
+};
+
+class EncodeWorkers {
+public:
+  explicit EncodeWorkers(std::size_t count) {
+    m_threads.reserve(count);
+    try {
+      for (std::size_t i = 0; i < count; ++i)
+        m_threads.emplace_back([this, i] { worker(i); });
+    } catch (...) {
+      stop();
+      throw;
+    }
+  }
+
+  ~EncodeWorkers() { stop(); }
+
+  void run(MipJob &job) {
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_job = &job;
+      m_active = std::min(m_threads.size(),
+                          job.blockCount / MIN_BLOCKS_PER_WORKER - 1);
+      m_remaining = m_active;
+      ++m_generation;
+    }
+    m_ready.notify_all();
+    job.work();
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_done.wait(lock, [&] { return m_remaining == 0; });
+    m_job = nullptr;
+  }
+
+private:
+  void worker(std::size_t index) {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    std::size_t generation = 0;
+    for (;;) {
+      m_ready.wait(lock,
+                   [&] { return m_stopping || m_generation != generation; });
+      if (m_stopping)
+        return;
+      generation = m_generation;
+      if (index >= m_active)
+        continue;
+      auto &job = *m_job;
+      lock.unlock();
+      job.work();
+      lock.lock();
+      if (--m_remaining == 0)
+        m_done.notify_one();
+    }
+  }
+
+  void stop() {
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      m_stopping = true;
+    }
+    m_ready.notify_all();
+    for (auto &thread : m_threads)
+      thread.join();
+  }
+
+  std::mutex m_mutex;
+  std::condition_variable m_ready;
+  std::condition_variable m_done;
+  std::vector<std::thread> m_threads;
+  // The caller keeps the current job alive until every worker has completed it.
+  MipJob *m_job = nullptr;
+  std::size_t m_generation = 0;
+  std::size_t m_active = 0;
+  std::size_t m_remaining = 0;
+  bool m_stopping = false;
+};
+
+std::optional<Error> encode_payload(Span<Rgba8MipView> mips,
+                                    const ExecutionOptions &execution,
+                                    const bc7enc_compress_block_params &params,
+                                    CompressedTexture &result) {
+  ensure_bc7enc_initialized();
+  std::optional<EncodeWorkers> workers;
+  const auto baseBlocks = result.mips.front().sizeBytes / 16;
+  auto participants = std::min<std::uint64_t>(
+      execution.maxWorkers, baseBlocks / MIN_BLOCKS_PER_WORKER);
+  if (participants > 1)
+    participants = std::min<std::uint64_t>(
+        participants, std::max(1U, std::thread::hardware_concurrency()));
+  if (participants > 1 && !detail::cancelled(execution)) {
+    try {
+      workers.emplace(static_cast<std::size_t>(participants) - 1);
+    } catch (const std::system_error &) {
+      return Error{ErrorCode::BackendFailure,
+                   "Could not create encoder worker.", 0};
+    }
+  }
+
+  for (const auto &layout : result.mips) {
+    if (detail::cancelled(execution))
+      return Error{ErrorCode::Cancelled,
+                   "Encoding cancelled before encoding mip level."};
+
+    MipJob job{mips.data[layout.level],
+               layout.blocksX,
+               static_cast<std::size_t>(layout.sizeBytes / 16),
+               result.payload.data() + layout.offsetBytes,
+               params,
+               execution};
+    if (workers && job.blockCount >= 2 * MIN_BLOCKS_PER_WORKER)
+      workers->run(job);
+    else
+      job.encode_range(0, job.blockCount);
+
+    if (job.cancelled.load(std::memory_order_relaxed) ||
+        detail::cancelled(execution)) {
+      return Error{ErrorCode::Cancelled,
+                   "Encoding cancelled during block processing.", layout.level};
+    }
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -84,159 +291,36 @@ Result<CompressedTexture> encode_bc7_mip(Rgba8MipView mip,
                  "Input bytes exceed maxInputBytes limit."};
   }
 
-  if (options.execution.cancelFlag &&
-      options.execution.cancelFlag->load(std::memory_order_relaxed)) {
+  if (detail::cancelled(options.execution)) {
     return Error{ErrorCode::Cancelled, "Encoding cancelled before starting."};
   }
-  ensure_bc7enc_initialized();
 
-  std::uint32_t blocksX = calc_blocks(mip.width);
-  std::uint32_t blocksY = calc_blocks(mip.height);
-  std::uint64_t rowPitchBytes = static_cast<std::uint64_t>(blocksX) * 16;
-  std::uint64_t totalSizeBytes;
-  if (!detail::multiply(rowPitchBytes, blocksY, totalSizeBytes)) {
+  MipLayout layout;
+  if (!make_layout(mip, 0, 0, layout)) {
     return Error{ErrorCode::IntegerOverflow, "BC7 size overflows."};
   }
-
-  if (totalSizeBytes > SIZE_MAX ||
-      detail::exceeds(totalSizeBytes, limits.maxOutputBytes) ||
-      detail::exceeds(totalSizeBytes, limits.maxWorkingBytes)) {
+  if (layout.sizeBytes > SIZE_MAX ||
+      detail::exceeds(layout.sizeBytes, limits.maxOutputBytes) ||
+      detail::exceeds(layout.sizeBytes, limits.maxWorkingBytes)) {
     return Error{ErrorCode::ResourceLimitExceeded,
                  "Output BC7 payload size exceeds maxOutputBytes limit."};
   }
 
-  bc7enc_compress_block_params compParams;
-  bc7enc_compress_block_params_init(&compParams);
-
-  if (options.target == GpuFormat::BC7_UNorm) {
-    bc7enc_compress_block_params_init_linear_weights(&compParams);
-  } else {
-    bc7enc_compress_block_params_init_perceptual_weights(&compParams);
-  }
-
-  switch (options.quality) {
-    case Quality::Fast:
-      compParams.m_uber_level = 0;
-      compParams.m_max_partitions_mode = 16;
-      compParams.m_try_least_squares = BC7ENC_FALSE;
-      break;
-    case Quality::Balanced:
-      compParams.m_uber_level = 1;
-      compParams.m_max_partitions_mode = BC7ENC_MAX_PARTITIONS1;
-      compParams.m_try_least_squares = BC7ENC_TRUE;
-      break;
-    case Quality::High:
-      compParams.m_uber_level = 2;
-      compParams.m_max_partitions_mode = BC7ENC_MAX_PARTITIONS1;
-      compParams.m_try_least_squares = BC7ENC_TRUE;
-      break;
-    default:
-      return Error{ErrorCode::UnsupportedOption, "Unknown quality preset."};
-  }
-
-  OwningBuffer payload(totalSizeBytes);
-  std::atomic<bool> cancelled{false};
-
-  std::uint32_t numWorkers =
-      std::min(blocksY, std::max(1U, options.execution.maxWorkers));
-
-  auto encode_row_range = [&](std::uint32_t startBY, std::uint32_t endBY) {
-    for (std::uint32_t by = startBY; by < endBY; ++by) {
-      if (options.execution.cancelFlag &&
-          options.execution.cancelFlag->load(std::memory_order_relaxed)) {
-        cancelled.store(true, std::memory_order_relaxed);
-        return;
-      }
-      if (cancelled.load(std::memory_order_relaxed)) {
-        return;
-      }
-
-      for (std::uint32_t bx = 0; bx < blocksX; ++bx) {
-        if (detail::cancelled(options.execution)) {
-          cancelled.store(true, std::memory_order_relaxed);
-          return;
-        }
-        alignas(16) std::uint8_t blockPixels[64];
-
-        for (std::uint32_t py = 0; py < 4; ++py) {
-          std::uint32_t iy = std::min(by * 4 + py, mip.height - 1);
-          const std::byte *srcRow =
-              mip.bytes.data + static_cast<std::size_t>(iy * mip.rowPitchBytes);
-
-          for (std::uint32_t px = 0; px < 4; ++px) {
-            std::uint32_t ix = std::min(bx * 4 + px, mip.width - 1);
-            const std::byte *srcPixel =
-                srcRow + static_cast<std::size_t>(ix) * 4;
-
-            std::size_t dstOffset = (py * 4 + px) * 4;
-            std::memcpy(&blockPixels[dstOffset], srcPixel, 4);
-          }
-        }
-
-        std::size_t dstOffset = static_cast<std::size_t>(
-            by * rowPitchBytes + std::uint64_t(bx) * 16);
-        bc7enc_compress_block(payload.data() + dstOffset, blockPixels,
-                              &compParams);
-      }
-    }
-  };
-
-  if (numWorkers == 1 || blocksY <= 1) {
-    encode_row_range(0, blocksY);
-  } else {
-    std::vector<std::thread> threads;
-    threads.reserve(numWorkers);
-    // Join already-started workers even if a later thread constructor throws.
-    struct JoinThreads {
-      std::vector<std::thread> &threads;
-      ~JoinThreads() {
-        for (auto &t : threads)
-          if (t.joinable())
-            t.join();
-      }
-    } join{threads};
-    std::uint32_t rowsPerThread =
-        blocksY / numWorkers + (blocksY % numWorkers != 0);
-
-    for (std::uint32_t t = 0; t < numWorkers; ++t) {
-      std::uint32_t startY = t * rowsPerThread;
-      std::uint32_t endY = std::min(startY + rowsPerThread, blocksY);
-      if (startY < endY) {
-        threads.emplace_back(encode_row_range, startY, endY);
-      }
-    }
-
-    for (auto &th : threads) {
-      if (th.joinable()) {
-        th.join();
-      }
-    }
-  }
-
-  if (cancelled.load(std::memory_order_relaxed) ||
-      (options.execution.cancelFlag &&
-       options.execution.cancelFlag->load(std::memory_order_relaxed))) {
-    return Error{ErrorCode::Cancelled,
-                 "Encoding cancelled during block processing."};
-  }
+  bc7enc_compress_block_params params;
+  if (!init_params(options, params))
+    return Error{ErrorCode::UnsupportedOption, "Unknown quality preset."};
 
   CompressedTexture result;
   result.format = options.target;
   result.metadata = options.metadata;
   result.metadata.colorSpace = detail::color_space(options.target);
-  result.payload = std::move(payload);
-
-  MipLayout layout;
-  layout.level = 0;
-  layout.width = mip.width;
-  layout.height = mip.height;
-  layout.blocksX = blocksX;
-  layout.blocksY = blocksY;
-  layout.offsetBytes = 0;
-  layout.sizeBytes = totalSizeBytes;
-  layout.rowPitchBytes = rowPitchBytes;
-
   result.mips.push_back(layout);
+  result.payload.resize(static_cast<std::size_t>(layout.sizeBytes));
+  if (auto error =
+          encode_payload({&mip, 1}, options.execution, params, result)) {
+    error->mipLevel = kMipLevelNotApplicable;
+    return std::move(*error);
+  }
 
   return result;
 } catch (const std::bad_alloc &) {
@@ -267,9 +351,8 @@ Result<CompressedTexture> encode_bc7_chain(Span<Rgba8MipView> suppliedMips,
     return Error{ErrorCode::InvalidArgument,
                  "Color space conflicts with target format."};
   }
-  if (options.quality != Quality::Fast &&
-      options.quality != Quality::Balanced &&
-      options.quality != Quality::High) {
+  bc7enc_compress_block_params params;
+  if (!init_params(options, params)) {
     return Error{ErrorCode::UnsupportedOption, "Unknown quality preset."};
   }
 
@@ -292,7 +375,12 @@ Result<CompressedTexture> encode_bc7_chain(Span<Rgba8MipView> suppliedMips,
                  "Mip chain dimensions exceed limits."};
   }
 
-  std::uint64_t inputBytes = 0, outputBytes = 0, largestMip = 0;
+  CompressedTexture result;
+  result.format = options.target;
+  result.metadata = options.metadata;
+  result.metadata.colorSpace = detail::color_space(options.target);
+  result.mips.reserve(suppliedMips.size);
+  std::uint64_t inputBytes = 0, outputBytes = 0;
   for (std::size_t i = 0; i < suppliedMips.size; ++i) {
     std::uint32_t expectedW =
         calc_mip_dim(baseWidth, static_cast<std::uint32_t>(i));
@@ -319,68 +407,30 @@ Result<CompressedTexture> encode_bc7_chain(Span<Rgba8MipView> suppliedMips,
       return Error{ErrorCode::TruncatedInput, "Mip input is truncated.",
                    static_cast<std::uint32_t>(i)};
     }
-    std::uint64_t size;
-    if (!detail::multiply(static_cast<std::uint64_t>(calc_blocks(expectedW)) *
-                              16,
-                          calc_blocks(expectedH), size)) {
+    MipLayout layout;
+    if (!make_layout(mip, static_cast<std::uint32_t>(i), outputBytes, layout))
       return Error{ErrorCode::IntegerOverflow, "BC7 mip size overflows."};
-    }
-    largestMip = std::max(largestMip, size);
     if (!detail::add(inputBytes, requiredBytes, inputBytes) ||
-        !detail::add(outputBytes, size, outputBytes)) {
+        !detail::add(outputBytes, layout.sizeBytes, outputBytes)) {
       return Error{ErrorCode::IntegerOverflow, "Combined mip size overflows."};
     }
+    result.mips.push_back(layout);
   }
-  std::uint64_t workingBytes;
-  if (!detail::add(outputBytes, largestMip, workingBytes) ||
-      outputBytes > SIZE_MAX ||
+  if (outputBytes > SIZE_MAX ||
       detail::exceeds(inputBytes, limits.maxInputBytes) ||
       detail::exceeds(outputBytes, limits.maxOutputBytes) ||
-      detail::exceeds(workingBytes, limits.maxWorkingBytes)) {
+      detail::exceeds(outputBytes, limits.maxWorkingBytes)) {
     return Error{ErrorCode::ResourceLimitExceeded,
                  "Mip chain exceeds input, output or working limit."};
   }
-
-  CompressedTexture result;
-  result.format = options.target;
-  result.metadata = options.metadata;
-  result.metadata.colorSpace = detail::color_space(options.target);
-  result.payload.reserve(static_cast<std::size_t>(outputBytes));
-
-  std::uint64_t currentOffset = 0;
-
-  for (std::size_t i = 0; i < suppliedMips.size; ++i) {
-    if (options.execution.cancelFlag &&
-        options.execution.cancelFlag->load(std::memory_order_relaxed)) {
-      return Error{ErrorCode::Cancelled,
-                   "Encoding cancelled before encoding mip level."};
-    }
-
-    auto mipRes = encode_bc7_mip(suppliedMips.data[i], options);
-    if (!mipRes) {
-      Error err = mipRes.error();
-      err.mipLevel = static_cast<std::uint32_t>(i);
-      return err;
-    }
-
-    CompressedTexture singleMipTex = std::move(mipRes.value());
-
-    MipLayout layout = singleMipTex.mips[0];
-    layout.level = static_cast<std::uint32_t>(i);
-    layout.offsetBytes = currentOffset;
-
-    result.mips.push_back(layout);
-    result.payload.insert(result.payload.end(), singleMipTex.payload.begin(),
-                          singleMipTex.payload.end());
-
-    currentOffset += layout.sizeBytes;
-
-    if (limits.maxOutputBytes > 0 &&
-        result.payload.size() > limits.maxOutputBytes) {
-      return Error{ErrorCode::ResourceLimitExceeded,
-                   "Combined BC7 payload size exceeds maxOutputBytes limit."};
-    }
+  if (detail::cancelled(options.execution)) {
+    return Error{ErrorCode::Cancelled,
+                 "Encoding cancelled before encoding mip level."};
   }
+  result.payload.resize(static_cast<std::size_t>(outputBytes));
+  if (auto error =
+          encode_payload(suppliedMips, options.execution, params, result))
+    return std::move(*error);
 
   return result;
 } catch (const std::bad_alloc &) {
