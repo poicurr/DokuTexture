@@ -21,4 +21,4 @@ This project (`DokuTexture`) incorporates open-source software dependencies.
   - `transcoder/basisu_file_headers.h`: KTX2 and Data Format Descriptor (DFD) header layouts.
   - `zstd/zstd.c`: bundled Zstandard implementation for UASTC + Zstd (BasisLZ uses Basis codebooks, not Zstd). BSD-3-Clause selected from BSD/GPL alternatives; see `licenses/zstd-LICENSE` and `licenses/zstd-NOTICE`, including xxHash/Tino Reichardt attribution and the MIT libdivsufsort-lite notice in the amalgamation.
 
-`bc7decomp.cpp` is compiled into a separate test/benchmark helper, not the production library. The pinned bc7enc and Basis upstream files are unmodified. Test fixtures are original generated patterns with provenance and licensing in `tests/fixtures/README.md`.
+`bc7decomp.cpp` is compiled into a separate test/benchmark helper, not the production library. The build applies `cmake/Bc7enc.patch` to the pinned bc7enc sources for standard C prototypes and C++ decoder storage. Test fixtures are original generated patterns with provenance and licensing in `tests/fixtures/README.md`.
