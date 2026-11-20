@@ -35,6 +35,7 @@ else()
         bc7enc_dep
         GIT_REPOSITORY https://github.com/richgel999/bc7enc.git
         GIT_TAG        f66c2e489b07138f2673a2fb3d27c1aa1d565c48
+        PATCH_COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchBc7enc.cmake"
         GIT_SHALLOW    FALSE
         SOURCE_SUBDIR  _dokutexture_sources_only
     )

@@ -1,0 +1,158 @@
+diff --git a/bc7decomp.cpp b/bc7decomp.cpp
+index 3099ec4..090d024 100644
+--- a/bc7decomp.cpp
++++ b/bc7decomp.cpp
+@@ -244,9 +244,9 @@ bool unpack_bc7_mode4_5(uint32_t mode, const void* pBlock_bits, color_rgba* pPix
+     for (uint32_t i = 0; i < 16; i++)
+     {
+         pPixels[i] = block_colors[weights[i]];
+-		pPixels[i].a = block_colors[a_weights[i]].a;
++		pPixels[i][3] = block_colors[a_weights[i]][3];
+         if (comp_rot >= 1)
+-			std::swap(pPixels[i].a, pPixels[i].m_comps[comp_rot - 1]);
++			std::swap(pPixels[i][3], pPixels[i].m_comps[comp_rot - 1]);
+     }
+
+     return true;
+@@ -268,35 +268,30 @@ struct bc7_mode_6
+         uint64_t m_p0 : 1;
+     } m_lo;
+
+-	union
++	struct
+     {
+-		struct
+-		{
+-			uint64_t m_p1 : 1;
+-			uint64_t m_s00 : 3;
+-			uint64_t m_s10 : 4;
+-			uint64_t m_s20 : 4;
+-			uint64_t m_s30 : 4;
+-
+-			uint64_t m_s01 : 4;
+-			uint64_t m_s11 : 4;
+-			uint64_t m_s21 : 4;
+-			uint64_t m_s31 : 4;
+-
+-			uint64_t m_s02 : 4;
+-			uint64_t m_s12 : 4;
+-			uint64_t m_s22 : 4;
+-			uint64_t m_s32 : 4;
+-
+-			uint64_t m_s03 : 4;
+-			uint64_t m_s13 : 4;
+-			uint64_t m_s23 : 4;
+-			uint64_t m_s33 : 4;
+-
+-		} m_hi;
+-
+-		uint64_t m_hi_bits;
+-	};
++		uint64_t m_p1 : 1;
++		uint64_t m_s00 : 3;
++		uint64_t m_s10 : 4;
++		uint64_t m_s20 : 4;
++		uint64_t m_s30 : 4;
++
++		uint64_t m_s01 : 4;
++		uint64_t m_s11 : 4;
++		uint64_t m_s21 : 4;
++		uint64_t m_s31 : 4;
++
++		uint64_t m_s02 : 4;
++		uint64_t m_s12 : 4;
++		uint64_t m_s22 : 4;
++		uint64_t m_s32 : 4;
++
++		uint64_t m_s03 : 4;
++		uint64_t m_s13 : 4;
++		uint64_t m_s23 : 4;
++		uint64_t m_s33 : 4;
++
++	} m_hi;
+ };
+
+ bool unpack_bc7_mode6(const void *pBlock_bits, color_rgba *pPixels)
+diff --git a/bc7decomp.h b/bc7decomp.h
+index 3c1e835..fd50ece 100644
+--- a/bc7decomp.h
++++ b/bc7decomp.h
+@@ -16,18 +16,7 @@ template <typename S> inline S clamp(S value, S low, S high) { return (value < l
+ class color_rgba
+ {
+ public:
+-	union
+-	{
+-		uint8_t m_comps[4];
+-
+-		struct
+-		{
+-			uint8_t r;
+-			uint8_t g;
+-			uint8_t b;
+-			uint8_t a;
+-		};
+-	};
++	uint8_t m_comps[4];
+
+     inline color_rgba()
+     {
+@@ -109,9 +98,9 @@ public:
+
+     inline color_rgba &set_rgb(const color_rgba &other)
+     {
+-		r = other.r;
+-		g = other.g;
+-		b = other.b;
++		m_comps[0] = other.m_comps[0];
++		m_comps[1] = other.m_comps[1];
++		m_comps[2] = other.m_comps[2];
+         return *this;
+     }
+
+diff --git a/bc7enc.c b/bc7enc.c
+index f8a561d..d0a3a2f 100644
+--- a/bc7enc.c
++++ b/bc7enc.c
+@@ -12,19 +12,15 @@
+ static inline int32_t clampi(int32_t value, int32_t low, int32_t high) { if (value < low) value = low; else if (value > high) value = high; return value; }
+ static inline float clampf(float value, float low, float high) { if (value < low) value = low; else if (value > high) value = high; return value; }
+ static inline float saturate(float value) { return clampf(value, 0, 1.0f); }
+-static inline uint8_t minimumub(uint8_t a, uint8_t b) { return (a < b) ? a : b; }
+ static inline uint32_t minimumu(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
+ static inline float minimumf(float a, float b) { return (a < b) ? a : b; }
+-static inline uint8_t maximumub(uint8_t a, uint8_t b) { return (a > b) ? a : b; }
+ static inline uint32_t maximumu(uint32_t a, uint32_t b) { return (a > b) ? a : b; }
+ static inline float maximumf(float a, float b) { return (a > b) ? a : b; }
+ static inline int squarei(int i) { return i * i; }
+ static inline float squaref(float i) { return i * i; }
+
+ static inline int32_t iabs32(int32_t v) { uint32_t msk = v >> 31; return (v ^ msk) - msk; }
+-static inline void swapub(uint8_t* a, uint8_t* b) { uint8_t t = *a; *a = *b; *b = t; }
+ static inline void swapu(uint32_t* a, uint32_t* b) { uint32_t t = *a; *a = *b; *b = t; }
+-static inline void swapf(float* a, float* b) { float t = *a; *a = *b; *b = t; }
+
+ typedef struct { uint8_t m_c[4]; } color_quad_u8;
+ typedef struct { float m_c[4]; } vec4F;
+@@ -112,7 +108,7 @@ static endpoint_err g_bc7_mode_7_optimal_endpoints[256][2][2]; // [c][pbit][hp][
+ const uint32_t BC7E_MODE_7_OPTIMAL_INDEX = 1;
+
+ // Initialize the lookup table used for optimal single color compression in mode 1. Must be called before encoding.
+-void bc7enc_compress_block_init()
++void bc7enc_compress_block_init(void)
+ {
+     for (int c = 0; c < 256; c++)
+     {
+diff --git a/bc7enc.h b/bc7enc.h
+index 6001aca..3686497 100644
+--- a/bc7enc.h
++++ b/bc7enc.h
+@@ -70,7 +70,7 @@ inline void bc7enc_compress_block_params_init(bc7enc_compress_block_params *p)
+ }
+
+ // bc7enc_compress_block_init() MUST be called before calling bc7enc_compress_block() (or you'll get artifacts).
+-void bc7enc_compress_block_init();
++void bc7enc_compress_block_init(void);
+
+ // Packs a single block of 16x16 RGBA pixels (R first in memory) to 128-bit BC7 block pBlock, using either mode 1 and/or 6.
+ // Alpha blocks will always use mode 6, and by default opaque blocks will use either modes 1 or 6.

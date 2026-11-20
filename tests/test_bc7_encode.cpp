@@ -109,9 +109,9 @@ void test_padded_row_pitch() {
 
   // Verify decoded RGB color is close to original (200, 100, 50)
   for (int i = 0; i < 16; ++i) {
-    assert(std::abs(static_cast<int>(decoded[i].r) - 200) <= 8);
-    assert(std::abs(static_cast<int>(decoded[i].g) - 100) <= 8);
-    assert(std::abs(static_cast<int>(decoded[i].b) - 50) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][0]) - 200) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][1]) - 100) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][2]) - 50) <= 8);
   }
 
   std::cout << "  -> PASSED" << std::endl;
@@ -147,10 +147,10 @@ void test_translucent_alpha_encoding() {
   assert(unpackOk);
 
   for (int i = 0; i < 16; ++i) {
-    assert(std::abs(static_cast<int>(decoded[i].r) - 200) <= 8);
-    assert(std::abs(static_cast<int>(decoded[i].g) - 100) <= 8);
-    assert(std::abs(static_cast<int>(decoded[i].b) - 50) <= 8);
-    assert(std::abs(static_cast<int>(decoded[i].a) - 128) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][0]) - 200) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][1]) - 100) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][2]) - 50) <= 8);
+    assert(std::abs(static_cast<int>(decoded[i][3]) - 128) <= 8);
   }
 
   std::cout << "  -> PASSED" << std::endl;

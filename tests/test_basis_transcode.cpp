@@ -51,12 +51,12 @@ int main() {
             maxAlphaError =
                 std::max(maxAlphaError,
                          static_cast<unsigned>(
-                             std::abs(int(decoded[y * 4 + x].a) - expected)));
+                             std::abs(int(decoded[y * 4 + x][3]) - expected)));
             const int source[3] = {int((bx * 4 + x) * 255 / 7),
                                    int((by * 4 + y) * 255 / 7), 100};
-            const int decodedRgb[3] = {decoded[y * 4 + x].r,
-                                       decoded[y * 4 + x].g,
-                                       decoded[y * 4 + x].b};
+            const int decodedRgb[3] = {decoded[y * 4 + x][0],
+                                       decoded[y * 4 + x][1],
+                                       decoded[y * 4 + x][2]};
             for (unsigned c = 0; c < 3; ++c) {
               const int error = decodedRgb[c] - source[c];
               maxRgbError =

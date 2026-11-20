@@ -89,9 +89,9 @@ double compute_psnr(const std::vector<std::byte> &originalRgba, std::uint32_t w,
           int bOrig = static_cast<int>(originalRgba[origIdx + 2]);
 
           bc7decomp::color_rgba dec = decoded[py * 4 + px];
-          int rDec = dec.r;
-          int gDec = dec.g;
-          int bDec = dec.b;
+          int rDec = dec[0];
+          int gDec = dec[1];
+          int bDec = dec[2];
 
           double dr = rOrig - rDec;
           double dg = gOrig - gDec;
