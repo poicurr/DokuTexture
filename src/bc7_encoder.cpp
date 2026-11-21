@@ -7,7 +7,10 @@
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <optional>
+#include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <vector>
 
